@@ -2,7 +2,7 @@
 -- File: data_quality_checks.sql
 -- Description: Data Quality Checks for Staging Layer
 -- Author: Zineddine Rebbouh
--- Created: 2025-07-08
+-- Created: 2025-07-10
 -- Version: 1.1
 -- Project: SQL Data Warehouse Project
 -- Purpose: Ensure raw data quality before transforming/loading into DW

@@ -1,0 +1,293 @@
+-- File: load_datawarehouse_tables.sql
+-- Description: Populates data warehouse tables from staging tables for the SQL Data Warehouse Project
+-- Author: Zineddine Rebbouh
+-- Created: 2025-07-10
+-- Version: 1.0
+-- Purpose: Transforms and loads data from staging schema into data warehouse tables
+-- Usage: Execute this script in SQL Server Management Studio or similar SQL client
+-- Prerequisites:
+--   - Database [sql-datawarehouse-project-db] with staging, dw_customer, and dw_product schemas must exist
+--   - Staging tables (crm_cust_info, crm_prd_info, crm_sales_details, erp_customer_info, erp_customer_country, erp_product_maintenance) must be populated
+--   - Data warehouse tables (dim_customer, dim_product, fct_sales, erp_customer_info, erp_customer_country, erp_product_maintenance) must exist
+-- Notes:
+--   - Errors are logged to the console via RAISERROR and PRINT statements
+--   - Load durations are logged in seconds for each table
+-- Change Log:
+--   - v1.0: Initial version with modular LoadTable procedure, transaction management, and duration tracking
+
+SET NOCOUNT ON;
+GO
+
+-- Set database context
+USE [sql-datawarehouse-project-db];
+GO
+
+-- Create helper procedure for loading data warehouse tables
+IF OBJECT_ID('dw_customer.LoadTable') IS NOT NULL
+    DROP PROCEDURE dw_customer.LoadTable;
+GO
+
+CREATE PROCEDURE dw_customer.LoadTable
+    @TargetSchema NVARCHAR(128),
+    @TargetTable NVARCHAR(128),
+    @InsertQuery NVARCHAR(MAX),
+    @Step INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @StartTime DATETIME2 = SYSDATETIME();
+    DECLARE @EndTime DATETIME2;
+    DECLARE @DurationSeconds DECIMAL(10, 3);
+    DECLARE @RowCount INT;
+    DECLARE @SQL NVARCHAR(MAX);
+
+    BEGIN TRY
+        -- Validate table existence
+        IF OBJECT_ID(@TargetSchema + '.' + @TargetTable) IS NOT NULL
+        BEGIN
+            PRINT 'Found table ' + @TargetSchema + '.' + @TargetTable + '. Starting INSERT...';
+            
+            -- Execute INSERT query
+            SET @SQL = @InsertQuery;
+            EXEC sp_executesql @SQL;
+            SET @RowCount = @@ROWCOUNT;
+
+            SET @EndTime = SYSDATETIME();
+            SET @DurationSeconds = CAST(DATEDIFF(MILLISECOND, @StartTime, @EndTime) AS DECIMAL(10, 3)) / 1000;
+
+            PRINT 'Loaded ' + CAST(@RowCount AS VARCHAR(10)) + ' rows into ' + @TargetSchema + '.' + @TargetTable + '.';
+            PRINT '⏱️ Duration (' + @TargetTable + '): ' + CAST(@DurationSeconds AS VARCHAR(10)) + ' seconds.';
+        END
+        ELSE
+        BEGIN
+            RAISERROR ('ERROR in Step %d: Table %s.%s does not exist.', 16, 1, @Step, @TargetSchema, @TargetTable);
+        END
+    END TRY
+    BEGIN CATCH
+        SET @EndTime = SYSDATETIME();
+        SET @DurationSeconds = CAST(DATEDIFF(MILLISECOND, @StartTime, @EndTime) AS DECIMAL(10, 3)) / 1000;
+        DECLARE @ErrorMessage NVARCHAR(4000) = ERROR_MESSAGE();
+        RAISERROR ('ERROR in Step %d loading %s.%s: %s', 16, 1, @Step, @TargetSchema, @TargetTable, @ErrorMessage);
+    END CATCH
+END;
+GO
+
+-- Start load process
+PRINT '============================';
+PRINT 'BEGINNING DATA WAREHOUSE LOAD';
+PRINT '============================';
+GO
+
+BEGIN TRY
+    BEGIN TRANSACTION;
+    PRINT 'Transaction started successfully.';
+
+    DECLARE @Step INT = 1;
+
+    ---------------------------------------------------------------
+    -- 1. Load dw_customer.dim_customer
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_customer.dim_customer ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_customer',
+        @TargetTable = 'dim_customer',
+        @InsertQuery = N'
+            INSERT INTO dw_customer.dim_customer (cst_id, cst_key, cst_firstname, cst_lastname, cst_marital_status, cst_gndr, cst_create_date)
+            SELECT 
+                cst_id, 
+                cst_key, 
+                TRIM(cst_firstname) AS cst_firstname,
+                TRIM(cst_lastname) AS cst_lastname,
+                CASE 
+                    WHEN UPPER(TRIM(cst_marital_status)) = ''M'' THEN ''Married''
+                    WHEN UPPER(TRIM(cst_marital_status)) = ''S'' THEN ''Single'' 
+                    ELSE ''N/A''
+                END AS cst_marital_status,
+                CASE 
+                    WHEN UPPER(TRIM(cst_gndr)) = ''F'' THEN ''Female'' 
+                    WHEN UPPER(TRIM(cst_gndr)) = ''M'' THEN ''Male'' 
+                    ELSE ''N/A''
+                END AS cst_gndr,
+                cst_create_date 
+            FROM (
+                SELECT 
+                    *,
+                    ROW_NUMBER() OVER (PARTITION BY cst_id ORDER BY cst_create_date DESC) AS Flag_last 
+                FROM staging.crm_cust_info
+            ) t 
+            WHERE Flag_last = 1',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- 2. Load dw_product.dim_product
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_product.dim_product ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_product',
+        @TargetTable = 'dim_product',
+        @InsertQuery = N'
+            INSERT INTO dw_product.dim_product (prd_id, cat_id, prd_key, prd_nm, prd_cost, prd_line, prd_start_dt, prd_end_dt)
+            SELECT 
+                prd_id, 
+                REPLACE(SUBSTRING(prd_key, 1, 5), ''-'', ''_'') AS cat_id,  
+                REPLACE(SUBSTRING(prd_key, 7, LEN(prd_key)), ''-'', ''_'') AS prd_key,
+                prd_nm, 
+                ISNULL(prd_cost, 0) AS prd_cost, 
+                CASE 
+                    WHEN prd_line = ''R'' THEN ''Road''
+                    WHEN prd_line = ''M'' THEN ''Mountain''
+                    WHEN prd_line = ''S'' THEN ''Other sales''
+                    WHEN prd_line = ''T'' THEN ''Touring''
+                    ELSE ''N/A''
+                END AS prd_line,
+                CAST(prd_start_dt AS date) AS prd_start_dt,
+                CAST(
+                    DATEADD(DAY, -1, LEAD(prd_start_dt) OVER (PARTITION BY prd_key ORDER BY prd_start_dt))
+                    AS date
+                ) AS prd_end_dt
+            FROM staging.crm_prd_info
+            WHERE REPLACE(SUBSTRING(prd_key, 1, 5), ''-'', ''_'') IN 
+                  (SELECT ID FROM staging.erp_product_maintenance)',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- 3. Load dw_sales.fct_sales
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_sales.fct_sales ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_sales',
+        @TargetTable = 'fct_sales',
+        @InsertQuery = N'
+            INSERT INTO dw_sales.fct_sales (sls_ord_num, sls_prd_key, sls_cust_id, sls_order_dt, sls_ship_dt, sls_due_dt, sls_sales, sls_quantity, sls_price)
+            SELECT 
+                sls_ord_num,
+                sls_prd_key,
+                sls_cust_id,
+                CASE 
+                    WHEN LEN(sls_order_dt) != 8 THEN NULL
+                    ELSE CAST(CAST(sls_order_dt AS VARCHAR(8)) AS DATE) 
+                END AS sls_order_dt,
+                CASE 
+                    WHEN LEN(sls_ship_dt) != 8 THEN NULL
+                    ELSE CAST(CAST(sls_ship_dt AS VARCHAR(8)) AS DATE) 
+                END AS sls_ship_dt,
+                CASE 
+                    WHEN LEN(sls_due_dt) != 8 THEN NULL
+                    ELSE CAST(CAST(sls_due_dt AS VARCHAR(8)) AS DATE) 
+                END AS sls_due_dt,
+                CASE 
+                    WHEN sls_sales != sls_quantity * sls_price OR sls_sales IS NULL OR sls_sales <= 0 THEN sls_quantity * ABS(sls_price) 
+                    ELSE sls_sales
+                END AS sls_sales,
+                sls_quantity,
+                CASE
+                    WHEN sls_price != sls_sales / sls_quantity OR sls_price <= 0 THEN sls_sales / sls_quantity
+                    ELSE sls_price
+                END AS sls_price
+            FROM staging.crm_sales_details',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- 4. Load dw_customer.erp_customer_info
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_customer.erp_customer_info ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_customer',
+        @TargetTable = 'erp_customer_info',
+        @InsertQuery = N'
+            INSERT INTO dw_customer.erp_customer_info (CID, BDATE, GEN)
+            SELECT  
+                SUBSTRING(CID, 4, LEN(CID)),
+                CASE 
+                    WHEN BDATE > GETDATE() OR BDATE < ''1926-01-01'' THEN NULL
+                    ELSE BDATE
+                END AS BDATE,
+                CASE 
+                    WHEN GEN = ''F'' OR GEN = ''Female'' THEN ''Female''
+                    WHEN GEN = ''M'' OR GEN = ''Male'' THEN ''Male''
+                    ELSE ''N/A''
+                END AS GEN
+            FROM staging.erp_customer_info',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- 5. Load dw_customer.erp_customer_country
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_customer.erp_customer_country ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_customer',
+        @TargetTable = 'erp_customer_country',
+        @InsertQuery = N'
+            INSERT INTO dw_customer.erp_customer_country (CID, CNTRY)
+            SELECT  
+                REPLACE(CID, ''-'', ''''),
+                CASE 
+                    WHEN CNTRY = ''DE'' THEN ''Germany''
+                    WHEN CNTRY = ''US'' OR CNTRY = ''USA'' THEN ''United States''
+                    ELSE ''N/A''
+                END AS CNTRY
+            FROM staging.erp_customer_country',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- 6. Load dw_product.erp_product_maintenance
+    ---------------------------------------------------------------
+    PRINT 'Step ' + CAST(@Step AS VARCHAR(2)) + ': Loading dw_product.erp_product_maintenance ...';
+    EXEC dw_customer.LoadTable 
+        @TargetSchema = 'dw_product',
+        @TargetTable = 'erp_product_maintenance',
+        @InsertQuery = N'
+            INSERT INTO dw_product.erp_product_maintenance (ID, CAT, SUBCAT, MAINTENANCE)
+            SELECT ID, CAT, SUBCAT, MAINTENANCE 
+            FROM staging.erp_product_maintenance',
+        @Step = @Step;
+    SET @Step += 1;
+
+    ---------------------------------------------------------------
+    -- Finalize and verify
+    ---------------------------------------------------------------
+    COMMIT TRANSACTION;
+    PRINT '✅ All data warehouse tables loaded successfully and transaction committed.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0
+        ROLLBACK TRANSACTION;
+
+    DECLARE @ErrorMessage NVARCHAR(4000) = ERROR_MESSAGE();
+    DECLARE @ErrorSeverity INT = ERROR_SEVERITY();
+    DECLARE @ErrorState INT = ERROR_STATE();
+
+    PRINT '❌ ERROR in Step ' + CAST(@Step AS VARCHAR(2)) + ': ' + @ErrorMessage;
+    RAISERROR ('ERROR in Step %d: %s', @ErrorSeverity, @ErrorState, @Step, @ErrorMessage);
+END CATCH;
+GO
+
+-- Final table existence check
+PRINT '============================';
+PRINT 'VERIFYING DATA WAREHOUSE TABLES';
+PRINT '============================';
+
+IF EXISTS (
+    SELECT 1
+    FROM sys.tables t
+    JOIN sys.schemas s ON t.schema_id = s.schema_id
+    WHERE (s.name = 'dw_customer' AND t.name IN ('dim_customer', 'erp_customer_info', 'erp_customer_country'))
+       OR (s.name = 'dw_product' AND t.name IN ('dim_product', 'erp_product_maintenance'))
+       OR (s.name = 'dw_sales' AND t.name = 'fct_sales')
+    GROUP BY ()
+    HAVING COUNT(*) = 6
+)
+BEGIN
+    PRINT '✅ Final Check: All 6 data warehouse tables exist.';
+END
+ELSE
+BEGIN
+    PRINT '❌ Final Check Failed: One or more data warehouse tables are missing.';
+END
+GO

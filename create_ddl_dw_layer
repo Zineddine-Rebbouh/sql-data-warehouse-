@@ -1,0 +1,148 @@
+-- =====================================================================
+-- File: create_dw_tables.sql
+-- Description: Creates dimension and fact tables in the Data Warehouse
+-- Project: SQL Data Warehouse Project
+-- Author: Zineddine Rebbouh
+-- Created: 2025-07-10
+-- Version: 1.1
+-- Purpose: Create the core data warehouse schema objects (dimensions & facts)
+-- Usage: Execute in SQL Server Management Studio or any SQL client
+-- Prerequisites:
+--   - Database [sql-datawarehouse-project-db] must exist
+--   - Schemas [dw_customer], [dw_sales], [dw_product] must already exist
+-- Notes:
+--   - This script is idempotent: no objects will be duplicated if already created
+--   - Collaborative contributions should follow Git flow or pull request model
+-- GitHub Guidelines:
+--   - Fork → Commit → PR with description of change
+--   - Ensure scripts are safe and do not break staging/production pipelines
+-- =====================================================================
+
+SET NOCOUNT ON;
+GO
+
+-- Use target database
+USE [sql-datawarehouse-project-db];
+GO
+
+-- ==========================
+-- DIMENSION TABLES CREATION
+-- ==========================
+
+-- Create Customer Dimension
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_customer') AND name = 'dim_customer'
+)
+BEGIN
+    CREATE TABLE dw_customer.dim_customer (
+        cst_id INT,                        -- Surrogate key
+        cst_key NVARCHAR(50),             -- Business key
+        cst_firstname NVARCHAR(50),
+        cst_lastname NVARCHAR(50),
+        cst_gndr NVARCHAR(50),
+        cst_marital_status NVARCHAR(50),
+        cst_create_date DATE
+    );
+    PRINT '✅ Created table: dw_customer.dim_customer';
+END
+GO
+
+-- Create Product Dimension
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_product') AND name = 'dim_product'
+)
+BEGIN
+    CREATE TABLE dw_product.dim_product (
+        prd_id INT,
+        prd_key NVARCHAR(50),
+        cat_id NVARCHAR(50),
+        prd_nm NVARCHAR(100),
+        prd_line NVARCHAR(50),
+        prd_cost DECIMAL(18, 2),
+        prd_start_dt DATE,
+        prd_end_dt DATE
+    );
+    PRINT '✅ Created table: dw_product.dim_product';
+END
+GO
+
+-- ==========================
+-- FACT TABLES CREATION
+-- ==========================
+
+-- Create Sales Fact Table
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_sales') AND name = 'fct_sales'
+)
+BEGIN
+    CREATE TABLE dw_sales.fct_sales (
+        sls_ord_num NVARCHAR(50),
+        sls_cust_id NVARCHAR(50),
+        sls_prd_key NVARCHAR(50),
+        sls_order_dt DATE,
+        sls_ship_dt DATE,
+        sls_due_dt DATE,
+        sls_sales INT,
+        sls_quantity INT,
+        sls_price DECIMAL(18, 2)
+    );
+    PRINT '✅ Created table: dw_sales.fct_sales';
+END
+GO
+
+-- ==========================
+-- ERP SUPPORT TABLES
+-- ==========================
+
+-- ERP Customer Info
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_customer') AND name = 'erp_customer_info'
+)
+BEGIN
+    CREATE TABLE dw_customer.erp_customer_info (
+        CID NVARCHAR(50),
+        BDATE DATE,
+        GEN NVARCHAR(50)
+    );
+    PRINT '✅ Created table: dw_customer.erp_customer_info';
+END
+GO
+
+-- ERP Customer Country
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_customer') AND name = 'erp_customer_country'
+)
+BEGIN
+    CREATE TABLE dw_customer.erp_customer_country (
+        CID NVARCHAR(50),
+        CNTRY NVARCHAR(50)
+    );
+    PRINT '✅ Created table: dw_customer.erp_customer_country';
+END
+GO
+
+-- ERP Product Maintenance
+IF NOT EXISTS (
+    SELECT 1 FROM sys.tables 
+    WHERE schema_id = SCHEMA_ID('dw_product') AND name = 'erp_product_maintenance'
+)
+BEGIN
+    CREATE TABLE dw_product.erp_product_maintenance (
+        ID NVARCHAR(50),
+        CAT NVARCHAR(50),
+        SUBCAT NVARCHAR(50),
+        MAINTENANCE NVARCHAR(50)
+    );
+    PRINT '✅ Created table: dw_product.erp_product_maintenance';
+END
+GO
+
+-- ==========================
+-- END OF SCRIPT
+-- ==========================
+PRINT '🎉 All dimension and fact tables checked/created successfully.';

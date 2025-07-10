@@ -1,0 +1,154 @@
+-- ============================================================
+-- File: data_quality_checks.sql
+-- Description: Data Quality Checks for Staging Layer
+-- Author: Zineddine Rebbouh
+-- Created: 2025-07-08
+-- Version: 1.1
+-- Project: SQL Data Warehouse Project
+-- Purpose: Ensure raw data quality before transforming/loading into DW
+-- ============================================================
+
+USE [sql-datawarehouse-project-db];
+GO
+
+-- ============================================================
+-- 🔍 ERP SYSTEM DATA QUALITY CHECKS
+-- ============================================================
+
+-- =========================================
+-- 📄 TABLE: staging.erp_customer_info
+-- =========================================
+
+-- Preview
+SELECT TOP 100 * FROM staging.erp_customer_info;
+
+-- Distinct gender values
+SELECT DISTINCT GEN FROM staging.erp_customer_info;
+
+-- Invalid birthdates
+SELECT * 
+FROM staging.erp_customer_info
+WHERE BDATE > GETDATE() OR BDATE < '1926-01-01';
+
+-- Duplicate customer IDs
+SELECT 
+    CID,
+    COUNT(*) AS nb_duplicates
+FROM staging.erp_customer_info
+GROUP BY CID
+HAVING COUNT(*) >= 2;
+
+-- =========================================
+-- 📄 TABLE: staging.erp_customer_country
+-- =========================================
+
+-- Preview all country records
+SELECT TOP 100 * FROM staging.erp_customer_country;
+
+-- Check for existing customer IDs
+SELECT DISTINCT CID FROM staging.erp_customer_country;
+
+-- =========================================
+-- 📄 TABLE: staging.erp_product_maintenance
+-- =========================================
+
+-- Preview
+SELECT TOP 100 * FROM staging.erp_product_maintenance;
+
+-- Distinct values in key columns
+SELECT DISTINCT CAT FROM staging.erp_product_maintenance;
+SELECT DISTINCT SUBCAT FROM staging.erp_product_maintenance;
+SELECT DISTINCT MAINTENANCE FROM staging.erp_product_maintenance;
+
+-- Duplicate maintenance IDs
+SELECT 
+    ID,
+    COUNT(*) AS nb_duplicates
+FROM staging.erp_product_maintenance
+GROUP BY ID
+HAVING COUNT(*) >= 2;
+
+-- ============================================================
+-- 🔍 CRM SYSTEM DATA QUALITY CHECKS
+-- ============================================================
+
+-- =========================================
+-- 📄 TABLE: staging.crm_cust_info
+-- =========================================
+
+-- Preview
+SELECT TOP 100 * FROM staging.crm_cust_info;
+
+-- (Add null checks or pattern validations later if needed)
+
+-- =========================================
+-- 📄 TABLE: staging.crm_prd_info
+-- =========================================
+
+-- Preview
+SELECT TOP 100 * FROM staging.crm_prd_info;
+
+-- Duplicate product IDs
+SELECT 
+    prd_id, 
+    COUNT(*) AS nb_duplicates
+FROM staging.crm_prd_info
+GROUP BY prd_id
+HAVING COUNT(*) >= 2;
+
+-- Product name formatting issues (extra whitespace)
+SELECT prd_nm 
+FROM staging.crm_prd_info
+WHERE prd_nm != LTRIM(RTRIM(prd_nm));
+
+-- Distinct product lines
+SELECT DISTINCT prd_line FROM staging.crm_prd_info;
+
+-- =========================================
+-- 📄 TABLE: staging.crm_sales_details
+-- =========================================
+
+-- Preview
+SELECT TOP 100 * FROM staging.crm_sales_details;
+
+-- Duplicate order numbers
+SELECT 
+    sls_ord_num,
+    COUNT(*) AS nb_duplicates
+FROM staging.crm_sales_details
+GROUP BY sls_ord_num
+HAVING COUNT(*) >= 2;
+
+-- Logical date violations: order date after ship or due
+SELECT * 
+FROM staging.crm_sales_details 
+WHERE sls_order_dt > sls_ship_dt 
+   OR sls_order_dt > sls_due_dt;
+
+-- Inconsistent calculation logic
+SELECT * 
+FROM staging.crm_sales_details 
+WHERE sls_sales != sls_quantity * sls_price 
+   OR sls_price != sls_sales / NULLIF(sls_quantity, 0)
+   OR sls_quantity != sls_sales / NULLIF(sls_price, 0);
+
+-- Negative values check
+SELECT * 
+FROM staging.crm_sales_details 
+WHERE sls_sales < 0 
+   OR sls_price < 0 
+   OR sls_quantity < 0;
+
+-- Distinct product lines (if exists)
+SELECT DISTINCT prd_line FROM staging.crm_sales_details;
+
+-- Product name formatting (uncomment if applicable)
+-- SELECT prd_nm 
+-- FROM staging.crm_sales_details
+-- WHERE prd_nm != LTRIM(RTRIM(prd_nm));
+
+-- ============================================================
+-- ✅ END OF CHECKS
+-- ============================================================
+
+PRINT '🎯 All ERP and CRM data quality checks completed.';
